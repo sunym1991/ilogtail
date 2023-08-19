@@ -26,6 +26,8 @@ import (
 const (
 	MaxLogCount     = 1024
 	MaxLogGroupSize = 3 * 1024 * 1024
+	// new
+	MaxLogXXX = 3 * 1024 * 1024
 )
 
 // Other aggregators can use AggregatorBase as base aggregator.
