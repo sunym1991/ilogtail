@@ -69,6 +69,8 @@ DECLARE_FLAG_STRING(default_buffer_file_path);
 DECLARE_FLAG_STRING(ilogtail_docker_file_path_config);
 DECLARE_FLAG_INT32(data_server_port);
 DECLARE_FLAG_BOOL(enable_env_ref_in_config);
+// 新增
+DECLARE_FLAG_BOOL(enable_env_ref_in_config_new);
 
 void HandleSighupSignal(int signum, siginfo_t* info, void* context) {
     APSARA_LOG_INFO(sLogger, ("received signal", "SIGHUP"));
