@@ -187,6 +187,11 @@ public:
             rd_kafka_conf_set_default_topic_conf(mConf, tconf);
         }
 
+        // Initialize TLS configuration if enabled
+        if (!InitTlsConfig()) {
+            return false;
+        }
+
         for (const auto& kv : mConfig.CustomConfig) {
             if (!SetConfig(kv.first, kv.second)) {
                 return false;
@@ -309,6 +314,40 @@ private:
             LOG_ERROR(sLogger, ("Failed to set Kafka config", key)("value", value)("error", errstr));
             return false;
         }
+        return true;
+    }
+
+    bool InitTlsConfig() {
+        if (!mConfig.Authentication.TlsEnabled) {
+            return true;
+        }
+
+        if (!SetConfig(KAFKA_CONFIG_SECURITY_PROTOCOL, KAFKA_SECURITY_PROTOCOL_SSL)) {
+            return false;
+        }
+
+        if (!mConfig.Authentication.TlsCaFile.empty()) {
+            if (!SetConfig(KAFKA_CONFIG_SSL_CA_LOCATION, mConfig.Authentication.TlsCaFile)) {
+                return false;
+            }
+        }
+
+        const bool hasCert = !mConfig.Authentication.TlsCertFile.empty();
+
+        if (hasCert) {
+            if (!SetConfig(KAFKA_CONFIG_SSL_CERTIFICATE_LOCATION, mConfig.Authentication.TlsCertFile)) {
+                return false;
+            }
+            if (!SetConfig(KAFKA_CONFIG_SSL_KEY_LOCATION, mConfig.Authentication.TlsKeyFile)) {
+                return false;
+            }
+            if (!mConfig.Authentication.TlsKeyPassword.empty()) {
+                if (!SetConfig(KAFKA_CONFIG_SSL_KEY_PASSWORD, mConfig.Authentication.TlsKeyPassword)) {
+                    return false;
+                }
+            }
+        }
+
         return true;
     }
 
