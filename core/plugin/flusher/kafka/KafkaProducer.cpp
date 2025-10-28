@@ -73,11 +73,12 @@ KafkaProducer::ErrorType KafkaProducer::MapKafkaError(rd_kafka_resp_err_t err) {
 
 class KafkaProducer::Impl {
 public:
-    Impl() : mProducer(nullptr), mConf(nullptr), mIsRunning(false), mIsClosed(false) {}
+    Impl() : mProducer(nullptr), mConf(nullptr), mHeadersTemplate(nullptr), mIsRunning(false), mIsClosed(false) {}
     ~Impl() {
         if (!mIsClosed) {
             Close();
         }
+        ResetHeadersTemplate();
         for (auto& ctx : mContextPool) {
             delete ctx;
         }
@@ -148,19 +149,35 @@ public:
             return false;
         }
 
-        return InitProducer();
+        if (!InitProducer()) {
+            return false;
+        }
+
+        SetupHeadersTemplate();
+        return true;
     }
 
     void ProduceAsync(const std::string& topic,
                       std::string&& value,
                       KafkaProducer::Callback callback,
                       const std::string& key) {
+        rd_kafka_headers_t* headers = nullptr;
+        if (mHeadersTemplate) {
+            headers = rd_kafka_headers_copy(mHeadersTemplate);
+            if (!headers) {
+                LOG_ERROR(sLogger, ("failed to copy kafka headers template", ""));
+            }
+        }
+
         rd_kafka_t* producer = nullptr;
         {
             std::lock_guard<std::mutex> lock(mProducerMutex);
             producer = mProducer;
         }
         if (!producer) {
+            if (headers) {
+                rd_kafka_headers_destroy(headers);
+            }
             KafkaProducer::ErrorInfo errorInfo;
             errorInfo.type = KafkaProducer::ErrorType::OTHER_ERROR;
             errorInfo.message = "producer not initialized";
@@ -173,7 +190,26 @@ public:
         context->callback = std::move(callback);
 
         rd_kafka_resp_err_t err;
-        if (!key.empty()) {
+        if (headers && !key.empty()) {
+            err = rd_kafka_producev(producer,
+                                    RD_KAFKA_V_TOPIC(topic.c_str()),
+                                    RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA),
+                                    RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
+                                    RD_KAFKA_V_KEY(key.data(), key.size()),
+                                    RD_KAFKA_V_VALUE(value.data(), value.size()),
+                                    RD_KAFKA_V_HEADERS(headers),
+                                    RD_KAFKA_V_OPAQUE(context),
+                                    RD_KAFKA_V_END);
+        } else if (headers) {
+            err = rd_kafka_producev(producer,
+                                    RD_KAFKA_V_TOPIC(topic.c_str()),
+                                    RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA),
+                                    RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
+                                    RD_KAFKA_V_VALUE(value.data(), value.size()),
+                                    RD_KAFKA_V_HEADERS(headers),
+                                    RD_KAFKA_V_OPAQUE(context),
+                                    RD_KAFKA_V_END);
+        } else if (!key.empty()) {
             err = rd_kafka_producev(producer,
                                     RD_KAFKA_V_TOPIC(topic.c_str()),
                                     RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA),
@@ -196,12 +232,17 @@ public:
             LOG_ERROR(sLogger,
                       ("rd_kafka_producev error", rd_kafka_err2str(err))("code", static_cast<int>(err))("topic", topic)(
                           "value_size", value.size()));
-            ReleaseContext(context);
+            if (headers) {
+                rd_kafka_headers_destroy(headers);
+            }
             KafkaProducer::ErrorInfo errorInfo;
             errorInfo.type = KafkaProducer::MapKafkaError(err);
             errorInfo.message = rd_kafka_err2str(err);
             errorInfo.code = static_cast<int>(err);
-            callback(false, errorInfo);
+            if (context->callback) {
+                context->callback(false, errorInfo);
+            }
+            ReleaseContext(context);
         }
     }
 
@@ -235,6 +276,8 @@ public:
             rd_kafka_conf_destroy(mConf);
             mConf = nullptr;
         }
+
+        ResetHeadersTemplate();
 
         mIsClosed = true;
     }
@@ -489,9 +532,45 @@ private:
         return true;
     }
 
+    void SetupHeadersTemplate() {
+        ResetHeadersTemplate();
+        if (mConfig.Headers.empty()) {
+            return;
+        }
+
+        rd_kafka_headers_t* hdrs = rd_kafka_headers_new(static_cast<int>(mConfig.Headers.size()));
+        if (!hdrs) {
+            LOG_ERROR(sLogger, ("error", "Failed to allocate Kafka headers template"));
+            return;
+        }
+        for (const auto& kv : mConfig.Headers) {
+            rd_kafka_resp_err_t err = rd_kafka_header_add(hdrs,
+                                                          kv.first.c_str(),
+                                                          static_cast<int>(kv.first.size()),
+                                                          kv.second.data(),
+                                                          static_cast<int>(kv.second.size()));
+            if (err != RD_KAFKA_RESP_ERR_NO_ERROR) {
+                LOG_ERROR(sLogger,
+                          ("Failed to add Kafka header", rd_kafka_err2str(err))("header_key", kv.first)("header_value",
+                                                                                                        kv.second));
+                rd_kafka_headers_destroy(hdrs);
+                return;
+            }
+        }
+        mHeadersTemplate = hdrs;
+    }
+
+    void ResetHeadersTemplate() {
+        if (mHeadersTemplate) {
+            rd_kafka_headers_destroy(mHeadersTemplate);
+            mHeadersTemplate = nullptr;
+        }
+    }
+
     KafkaConfig mConfig;
     rd_kafka_t* mProducer;
     rd_kafka_conf_t* mConf;
+    rd_kafka_headers_t* mHeadersTemplate;
     std::atomic<bool> mIsRunning;
     std::thread mPollThread;
     std::mutex mProducerMutex;
