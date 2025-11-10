@@ -18,13 +18,15 @@
 
 #include <string>
 
-#include "BaseCollector.h"
-#include "Flags.h"
-#include "MetricEvent.h"
-#include "MetricValue.h"
 #include "_thirdparty/DCGM/dcgmlib/dcgm_fields.h"
+#include "common/Flags.h"
+#include "common/StringView.h"
 #include "host_monitor/HostMonitorContext.h"
 #include "host_monitor/SystemInterface.h"
+#include "host_monitor/collector/BaseCollector.h"
+#include "host_monitor/collector/CollectorConstants.h"
+#include "models/MetricEvent.h"
+#include "models/MetricValue.h"
 
 DEFINE_FLAG_INT32(basic_host_monitor_gpu_collect_interval, "basic host monitor gpu collect interval, seconds", 15);
 namespace logtail {
@@ -104,36 +106,36 @@ bool GPUCollector::Collect(HostMonitorContext& collectContext, PipelineEventGrou
         mCalculate.second.Reset();
 
         struct MetricDef {
-            const char* name;
+            StringView name;
             double* value;
         } metrics[] = {
-            {"gpu_decoder_utilization_max", &maxMetric.decoderUtilization},
-            {"gpu_decoder_utilization_min", &minMetric.decoderUtilization},
-            {"gpu_decoder_utilization_avg", &avgMetric.decoderUtilization},
-            {"gpu_encoder_utilization_max", &maxMetric.encoderUtilization},
-            {"gpu_encoder_utilization_min", &minMetric.encoderUtilization},
-            {"gpu_encoder_utilization_avg", &avgMetric.encoderUtilization},
-            {"gpu_gpu_usedutilization_max", &maxMetric.gpuUsedUtilization},
-            {"gpu_gpu_usedutilization_min", &minMetric.gpuUsedUtilization},
-            {"gpu_gpu_usedutilization_avg", &avgMetric.gpuUsedUtilization},
-            {"gpu_memory_freespace_max", &maxMetric.memoryFreeSpace},
-            {"gpu_memory_freespace_min", &minMetric.memoryFreeSpace},
-            {"gpu_memory_freespace_avg", &avgMetric.memoryFreeSpace},
-            {"gpu_memory_freeutilization_max", &maxMetric.memoryFreeUtilization},
-            {"gpu_memory_freeutilization_min", &minMetric.memoryFreeUtilization},
-            {"gpu_memory_freeutilization_avg", &avgMetric.memoryFreeUtilization},
-            {"gpu_memory_usedspace_max", &maxMetric.memoryUsedSpace},
-            {"gpu_memory_usedspace_min", &minMetric.memoryUsedSpace},
-            {"gpu_memory_usedspace_avg", &avgMetric.memoryUsedSpace},
-            {"gpu_memory_usedutilization_max", &maxMetric.memoryUsedUtilization},
-            {"gpu_memory_usedutilization_min", &minMetric.memoryUsedUtilization},
-            {"gpu_memory_usedutilization_avg", &avgMetric.memoryUsedUtilization},
-            {"gpu_gpu_temperature_max", &maxMetric.gpuTemperature},
-            {"gpu_gpu_temperature_min", &minMetric.gpuTemperature},
-            {"gpu_gpu_temperature_avg", &avgMetric.gpuTemperature},
-            {"gpu_power_readings_power_draw_max", &maxMetric.powerReadingsPowerDraw},
-            {"gpu_power_readings_power_draw_min", &minMetric.powerReadingsPowerDraw},
-            {"gpu_power_readings_power_draw_avg", &avgMetric.powerReadingsPowerDraw},
+            {kGpuDecoderUtilizationMax, &maxMetric.decoderUtilization},
+            {kGpuDecoderUtilizationMin, &minMetric.decoderUtilization},
+            {kGpuDecoderUtilizationAvg, &avgMetric.decoderUtilization},
+            {kGpuEncoderUtilizationMax, &maxMetric.encoderUtilization},
+            {kGpuEncoderUtilizationMin, &minMetric.encoderUtilization},
+            {kGpuEncoderUtilizationAvg, &avgMetric.encoderUtilization},
+            {kGpuGpuUsedutilizationMax, &maxMetric.gpuUsedUtilization},
+            {kGpuGpuUsedutilizationMin, &minMetric.gpuUsedUtilization},
+            {kGpuGpuUsedutilizationAvg, &avgMetric.gpuUsedUtilization},
+            {kGpuMemoryFreespaceMax, &maxMetric.memoryFreeSpace},
+            {kGpuMemoryFreespaceMin, &minMetric.memoryFreeSpace},
+            {kGpuMemoryFreespaceAvg, &avgMetric.memoryFreeSpace},
+            {kGpuMemoryFreeutilizationMax, &maxMetric.memoryFreeUtilization},
+            {kGpuMemoryFreeutilizationMin, &minMetric.memoryFreeUtilization},
+            {kGpuMemoryFreeutilizationAvg, &avgMetric.memoryFreeUtilization},
+            {kGpuMemoryUsedspaceMax, &maxMetric.memoryUsedSpace},
+            {kGpuMemoryUsedspaceMin, &minMetric.memoryUsedSpace},
+            {kGpuMemoryUsedspaceAvg, &maxMetric.memoryUsedSpace},
+            {kGpuMemoryUsedutilizationMax, &maxMetric.memoryUsedUtilization},
+            {kGpuMemoryUsedutilizationMin, &minMetric.memoryUsedUtilization},
+            {kGpuMemoryUsedutilizationAvg, &avgMetric.memoryUsedUtilization},
+            {kGpuGpuTemperatureMax, &maxMetric.gpuTemperature},
+            {kGpuGpuTemperatureMin, &minMetric.gpuTemperature},
+            {kGpuGpuTemperatureAvg, &avgMetric.gpuTemperature},
+            {kGpuPowerReadingsPowerDrawMax, &maxMetric.powerReadingsPowerDraw},
+            {kGpuPowerReadingsPowerDrawMin, &minMetric.powerReadingsPowerDraw},
+            {kGpuPowerReadingsPowerDrawAvg, &avgMetric.powerReadingsPowerDraw},
         };
 
         MetricEvent* metricEvent = groupPtr->AddMetricEvent(true);
@@ -141,15 +143,16 @@ bool GPUCollector::Collect(HostMonitorContext& collectContext, PipelineEventGrou
             return false;
         }
         metricEvent->SetTimestamp(gpuInfo.collectTime, 0);
-        metricEvent->SetTag(std::string("gpuId"), mCalculate.first);
-        metricEvent->SetTag(std::string("m"), std::string("system.gpu"));
+        const StringBuffer& gpuIdBuffer = metricEvent->GetSourceBuffer()->CopyString(mCalculate.first);
+        metricEvent->SetTagNoCopy(kTagKeyGpuId, StringView(gpuIdBuffer.data, gpuIdBuffer.size));
+
+        metricEvent->SetTagNoCopy(kTagKeyM, kMetricSystemGpu);
 
         metricEvent->SetValue<UntypedMultiDoubleValues>(metricEvent);
         auto* multiDoubleValues = metricEvent->MutableValue<UntypedMultiDoubleValues>();
         for (const auto& metric : metrics) {
             multiDoubleValues->SetValue(
-                std::string(metric.name),
-                UntypedMultiDoubleValue{UntypedValueMetricType::MetricTypeGauge, *metric.value});
+                metric.name, UntypedMultiDoubleValue{UntypedValueMetricType::MetricTypeGauge, *metric.value});
         }
     }
     return true;
