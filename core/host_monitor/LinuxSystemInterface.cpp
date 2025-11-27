@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <mutex>
 #include <string>
 
 using namespace std;
@@ -108,6 +109,61 @@ bool LinuxSystemInterface::ReadSocketStat(const std::filesystem::path& path, uin
             }
         }
     }
+    return true;
+}
+
+// Parse TCP state from /proc/net/tcp and /proc/net/tcp6 as a fallback when INET_DIAG is not available
+bool LinuxSystemInterface::ReadProcNetTcp(std::vector<uint64_t>& tcpStateCount) {
+    // Read /proc/net/tcp and /proc/net/tcp6
+    std::vector<std::filesystem::path> tcpFiles = {PROCESS_DIR / PROCESS_NET_TCP, PROCESS_DIR / PROCESS_NET_TCP6};
+
+    for (const auto& tcpFile : tcpFiles) {
+        if (!CheckExistance(tcpFile)) {
+            LOG_DEBUG(sLogger, ("TCP state file does not exist, skipping", tcpFile.string()));
+            continue;
+        }
+
+        std::vector<std::string> tcpLines;
+        std::string errorMessage;
+        if (GetFileLines(tcpFile, tcpLines, true, &errorMessage) != 0 || tcpLines.empty()) {
+            LOG_WARNING(sLogger, ("Failed to read TCP state file", tcpFile.string())("error", errorMessage));
+            continue;
+        }
+
+        if (tcpLines.size() < 2) {
+            // empty file
+            continue;
+        }
+
+        // Skip the header line
+        for (size_t i = 1; i < tcpLines.size(); ++i) {
+            const auto& line = tcpLines[i];
+
+            // Parse the line format: sl local_address rem_address st tx_queue rx_queue ...
+            // We need the 4th field (st) which is the TCP state in hex
+            FastFieldParser parser(line);
+
+            if (parser.GetFieldCount() < 4) {
+                LOG_WARNING(sLogger, ("Failed to parse TCP state line", line));
+                continue;
+            }
+
+            // Get the state field (index 3, 0-based)
+            auto stateField = parser.GetField(3);
+            if (stateField.empty()) {
+                continue;
+            }
+
+            // Convert hex string to integer
+            unsigned int state = Hex2Int(std::string(stateField));
+
+            // Validate state range
+            if (state >= TCP_ESTABLISHED && state <= TCP_CLOSING) {
+                tcpStateCount[state]++;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -234,9 +290,35 @@ bool LinuxSystemInterface::ReadNetLink(std::vector<uint64_t>& tcpStateCount) {
 
 bool LinuxSystemInterface::GetNetStateByNetLink(NetState& netState) {
     std::vector<uint64_t> tcpStateCount(TCP_CLOSING + 1, 0);
-    if (ReadNetLink(tcpStateCount) == false) {
+
+    static std::once_flag initFlag;
+    static bool netlinkAvailable = false;
+
+    bool success = false;
+    bool ranCallOnce = false;
+
+    std::call_once(initFlag, [this, &tcpStateCount, &success, &ranCallOnce]() {
+        ranCallOnce = true;
+        success = ReadNetLink(tcpStateCount);
+        if (success) {
+            netlinkAvailable = true;
+            LOG_INFO(sLogger, ("Netlink INET_DIAG is available, will use it for TCP state collection", ""));
+        } else {
+            netlinkAvailable = false;
+            LOG_INFO(sLogger, ("Netlink INET_DIAG not available, will use /proc/net/tcp fallback method", ""));
+            success = ReadProcNetTcp(tcpStateCount);
+        }
+    });
+
+    if (!ranCallOnce) {
+        success = netlinkAvailable ? ReadNetLink(tcpStateCount) : ReadProcNetTcp(tcpStateCount);
+    }
+
+    if (!success) {
+        LOG_ERROR(sLogger, ("Failed to read TCP state", ""));
         return false;
     }
+
     uint64_t tcp = 0, tcpSocketStat = 0;
 
     if (ReadSocketStat(PROCESS_DIR / PROCESS_NET_SOCKSTAT, tcp)) {
