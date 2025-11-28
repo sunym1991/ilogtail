@@ -28,8 +28,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/image"
 
 	"github.com/alibaba/ilogtail/pkg/flags"
 	"github.com/alibaba/ilogtail/pkg/helper"
@@ -164,7 +165,7 @@ func (info *K8SInfo) GetLabel(key string) string {
 }
 
 // ExtractK8sLabels only work for original docker container.
-func (info *K8SInfo) ExtractK8sLabels(containerInfo types.ContainerJSON) {
+func (info *K8SInfo) ExtractK8sLabels(containerInfo container.InspectResponse) {
 	// only pause container has k8s labels
 	if info.ContainerName == "POD" || info.ContainerName == "pause" {
 		info.mu.Lock()
@@ -243,7 +244,7 @@ func (info *K8SInfo) innerMatch(filter *K8SFilter) bool {
 
 type DockerInfoDetail struct {
 	StdoutPath       string
-	ContainerInfo    types.ContainerJSON
+	ContainerInfo    container.InspectResponse
 	ContainerNameTag map[string]string
 	K8SInfo          *K8SInfo
 	EnvConfigInfoMap map[string]*EnvConfigInfo
@@ -348,7 +349,7 @@ func (did *DockerInfoDetail) FindBestMatchedPath(pth string) (sourcePath, contai
 	// logger.Debugf(context.Background(), "FindBestMatchedPath for container %s, target path: %s, containerInfo: %+v", did.IDPrefix(), pth, did.ContainerInfo)
 
 	// check mounts
-	var bestMatchedMounts types.MountPoint
+	var bestMatchedMounts container.MountPoint
 	for _, mount := range did.ContainerInfo.Mounts {
 		// logger.Debugf("container(%s-%s) mount: source-%s destination-%s", did.IDPrefix(), did.ContainerInfo.Name, mount.Source, mount.Destination)
 		dst := mount.Destination
@@ -495,10 +496,10 @@ type ContainerCenter struct {
 }
 
 type ClientInterface interface {
-	ContainerList(ctx context.Context, options types.ContainerListOptions) ([]types.Container, error)
-	ImageInspectWithRaw(ctx context.Context, imageID string) (types.ImageInspect, []byte, error)
-	ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error)
-	Events(ctx context.Context, options types.EventsOptions) (<-chan events.Message, <-chan error)
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	ImageInspectWithRaw(ctx context.Context, imageID string) (image.InspectResponse, []byte, error)
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 }
 
 type ContainerHelperInterface interface {
@@ -597,7 +598,7 @@ func (dc *ContainerCenter) getImageName(id, defaultVal string) string {
 	return defaultVal
 }
 
-func (dc *ContainerCenter) getIPAddress(info types.ContainerJSON) string {
+func (dc *ContainerCenter) getIPAddress(info container.InspectResponse) string {
 	if detail, ok := dc.getContainerDetail(info.ID); ok && detail != nil {
 		return detail.ContainerIP
 	}
@@ -613,7 +614,7 @@ func (dc *ContainerCenter) getIPAddress(info types.ContainerJSON) string {
 // CreateInfoDetail create DockerInfoDetail with docker.Container
 // Container property used in this function : HostsPath, Config.Hostname, Name, Config.Image, Config.Env, Mounts
 // ContainerInfo.GraphDriver.Data["UpperDir"] Config.Labels
-func (dc *ContainerCenter) CreateInfoDetail(info types.ContainerJSON, envConfigPrefix string, selfConfigFlag bool) *DockerInfoDetail {
+func (dc *ContainerCenter) CreateInfoDetail(info container.InspectResponse, envConfigPrefix string, selfConfigFlag bool) *DockerInfoDetail {
 	// Generate Log Tags
 	containerNameTag := make(map[string]string)
 	k8sInfo := K8SInfo{}
@@ -670,7 +671,7 @@ func (dc *ContainerCenter) CreateInfoDetail(info types.ContainerJSON, envConfigP
 		containerNameTag["_container_ip_"] = ip
 	}
 
-	sortMounts := func(mounts []types.MountPoint) {
+	sortMounts := func(mounts []container.MountPoint) {
 		sort.Slice(mounts, func(i, j int) bool {
 			return mounts[i].Source < mounts[j].Source
 		})
@@ -719,7 +720,7 @@ func (dc *ContainerCenter) CreateInfoDetail(info types.ContainerJSON, envConfigP
 	return did
 }
 
-func formatContainerJSONPath(info *types.ContainerJSON) {
+func formatContainerJSONPath(info *container.InspectResponse) {
 	// for inner enterprise stdout scene, if path start with /.. , no format it
 	if !strings.HasPrefix(info.LogPath, "/..") {
 		info.LogPath = filepath.Clean(info.LogPath)
@@ -1135,7 +1136,7 @@ func (dc *ContainerCenter) fetchAll() error {
 	defer dc.containerStateLock.Unlock()
 	ctx, cancel := getContextWithTimeout(defaultContextTimeout)
 	defer cancel()
-	containers, err := dc.client.ContainerList(ctx, types.ContainerListOptions{All: true})
+	containers, err := dc.client.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		dc.setLastError(err, "list container error")
 		return err
@@ -1143,12 +1144,12 @@ func (dc *ContainerCenter) fetchAll() error {
 	logger.Debug(context.Background(), "fetch all", containers)
 	var containerMap = make(map[string]*DockerInfoDetail)
 
-	for _, container := range containers {
-		var containerDetail types.ContainerJSON
+	for _, c := range containers {
+		var containerDetail container.InspectResponse
 		for idx := 0; idx < 3; idx++ {
 			ctx, cancel := getContextWithTimeout(defaultContextTimeout)
 			defer cancel()
-			if containerDetail, err = dc.client.ContainerInspect(ctx, container.ID); err == nil {
+			if containerDetail, err = dc.client.ContainerInspect(ctx, c.ID); err == nil {
 				break
 			}
 			time.Sleep(time.Second * 5)
@@ -1158,9 +1159,9 @@ func (dc *ContainerCenter) fetchAll() error {
 				continue
 			}
 			formatContainerJSONPath(&containerDetail)
-			containerMap[container.ID] = dc.CreateInfoDetail(containerDetail, envConfigPrefix, false)
+			containerMap[c.ID] = dc.CreateInfoDetail(containerDetail, envConfigPrefix, false)
 		} else {
-			dc.setLastError(err, "inspect container error "+container.ID)
+			dc.setLastError(err, "inspect container error "+c.ID)
 		}
 	}
 	dc.updateContainers(containerMap)
@@ -1291,7 +1292,7 @@ func (dc *ContainerCenter) eventListener() {
 	for {
 		logger.Info(context.Background(), "docker event listener", "start")
 		ctx, cancel := context.WithCancel(context.Background())
-		events, errors := dc.client.Events(ctx, types.EventsOptions{})
+		events, errors := dc.client.Events(ctx, events.ListOptions{})
 		breakFlag := false
 		for !breakFlag {
 			timer.Reset(EventListenerTimeout)
