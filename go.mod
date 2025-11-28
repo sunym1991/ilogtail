@@ -7,6 +7,7 @@ require (
 	github.com/IBM/sarama v1.42.2
 	github.com/VictoriaMetrics/VictoriaMetrics v1.83.0
 	github.com/alibaba/ilogtail/pkg v0.0.0
+	github.com/apache/doris/sdk/go-doris-sdk v0.0.0-20251128023530-ff9100777811
 	github.com/apache/pulsar-client-go v0.10.0
 	github.com/buger/jsonparser v1.1.1
 	github.com/cespare/xxhash/v2 v2.3.0
@@ -238,7 +239,7 @@ require (
 	github.com/valyala/fastjson v1.6.3 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
-	github.com/valyala/gozstd v1.17.0 // indirect
+	github.com/valyala/gozstd v1.24.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/valyala/quicktemplate v1.7.0 // indirect
 	github.com/vishvananda/netlink v1.1.1-0.20210330154013-f5de75959ad5 // indirect
